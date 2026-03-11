@@ -1,0 +1,418 @@
+# 🎓 Module 5 — Forms & Validation
+
+> Forms are everywhere in real projects — login, register, create post, search, checkout. This module covers everything interviewers ask and everything you need for real projects.
+
+---
+
+## 🎯 The Interview Questions
+
+> *"What's the difference between a Form and ModelForm?"*
+> *"How does Django form validation work?"*
+> *"What is `cleaned_data`?"*
+
+---
+
+## 1️⃣ Two Types of Forms in Django
+
+```python
+# Type 1 — Form (not tied to any model)
+from django import forms
+
+class ContactForm(forms.Form):
+    name = forms.CharField(max_length=100)
+    email = forms.EmailField()
+    message = forms.CharField(widget=forms.Textarea)
+
+# Type 2 — ModelForm (tied to a model)
+from django import forms
+from .models import Post
+
+class PostForm(forms.ModelForm):
+    class Meta:
+        model = Post
+        fields = ['title', 'content']
+```
+
+### When to Use Which
+
+| Type | Use When |
+|------|----------|
+| `Form` | Data is **not** being saved to the database (contact form, search form, login form) |
+| `ModelForm` | Data **is** being saved to the database (create post, update profile, register user) |
+
+---
+
+## 2️⃣ How Django Processes a Form — The Full Flow
+
+```
+User fills form and clicks submit
+            ↓
+Browser sends POST request with form data
+            ↓
+Django creates form with submitted data:
+form = PostForm(request.POST)
+            ↓
+form.is_valid() is called
+            ↓
+    ┌───────┴────────┐
+   YES               NO
+    ↓                 ↓
+cleaned_data      form.errors
+available         populated
+    ↓                 ↓
+save/process      re-render form
+    ↓             with errors
+redirect
+```
+
+---
+
+## 3️⃣ `cleaned_data` — What It Is and Why It Exists
+
+> 📒 **Interview note:** This is the most asked form question in interviews.
+
+When a user submits a form, data arrives as **raw strings:**
+
+```python
+request.POST = {
+    'title': '  My Post  ',    # raw string with extra spaces
+    'age': '25',               # number, but as a string
+    'email': 'JOHN@EMAIL.COM'  # email, but uppercase
+}
+```
+
+After `form.is_valid()` runs, Django validates each field, converts values to correct Python types, and stores the result in `cleaned_data`:
+
+```python
+form.cleaned_data = {
+    'title': 'My Post',        # spaces stripped ✅
+    'age': 25,                 # converted to integer ✅
+    'email': 'john@email.com'  # normalised to lowercase ✅
+}
+```
+
+**Always use `cleaned_data` — never `request.POST` directly:**
+
+```python
+# ❌ Wrong — raw, unvalidated string
+title = request.POST['title']
+
+# ✅ Correct — validated and cleaned
+title = form.cleaned_data['title']
+```
+
+---
+
+## 4️⃣ Form in a View — Complete Pattern
+
+```python
+# views.py
+from django.shortcuts import render, redirect
+from .forms import PostForm
+
+def post_create(request):
+    if request.method == 'POST':
+        form = PostForm(request.POST, request.FILES)  # bind data to form
+        if form.is_valid():
+            post = form.save(commit=False)
+            post.author = request.user
+            post.save()
+            return redirect('blog:post-list')
+    else:
+        form = PostForm()  # empty form for GET request
+
+    # renders for both GET and invalid POST
+    return render(request, 'blog/form.html', {'form': form})
+```
+
+### Why `return render` Lives Outside the `if/else`
+
+```python
+if request.method == 'POST':
+    form = PostForm(request.POST)
+    if form.is_valid():
+        return redirect('blog:post-list')  # ← exits the function
+    # if invalid → falls through to render below
+else:
+    form = PostForm()  # empty form for GET
+
+# This render handles TWO cases:
+# 1. GET request  → renders empty form
+# 2. Invalid POST → renders form with errors
+return render(request, 'blog/form.html', {'form': form})
+```
+
+---
+
+## 5️⃣ Rendering Forms in Templates
+
+```html
+<!-- Option 1 — as_p: wraps fields in <p> tags (quickest) -->
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save</button>
+</form>
+
+<!-- Option 2 — as_table: wraps fields in <tr> tags -->
+<form method="post">
+    {% csrf_token %}
+    <table>{{ form.as_table }}</table>
+    <button type="submit">Save</button>
+</form>
+
+<!-- Option 3 — manual rendering (most control, used in real projects) -->
+<form method="post">
+    {% csrf_token %}
+
+    <div>
+        {{ form.title.label_tag }}   <!-- <label>Title:</label> -->
+        {{ form.title }}             <!-- <input type="text">   -->
+        {{ form.title.errors }}      <!-- validation errors     -->
+    </div>
+
+    <div>
+        {{ form.content.label_tag }}
+        {{ form.content }}
+        {{ form.content.errors }}
+    </div>
+
+    <button type="submit">Save</button>
+</form>
+```
+
+---
+
+## 6️⃣ Form Validation — 3 Levels
+
+### Level 1 — Automatic Field Validation
+
+Django validates automatically based on field type:
+
+```python
+email = forms.EmailField()
+# 'notanemail'     → invalid ❌
+# 'john@email.com' → valid ✅
+```
+
+### Level 2 — Custom Field Validation with `clean_<fieldname>`
+
+```python
+class PostForm(forms.ModelForm):
+    class Meta:
+        model = Post
+        fields = ['title', 'content']
+
+    def clean_title(self):
+        title = self.cleaned_data['title']
+
+        if len(title) < 10:
+            raise forms.ValidationError(
+                "Title must be at least 10 characters long."
+            )
+
+        if Post.objects.filter(title=title).exists():
+            raise forms.ValidationError(
+                "A post with this title already exists."
+            )
+
+        return title  # always return the value!
+```
+
+### Level 3 — Form-Level Validation with `clean`
+
+```python
+    def clean(self):
+        cleaned_data = super().clean()
+        title = cleaned_data.get('title')
+        content = cleaned_data.get('content')
+
+        # validation involving multiple fields at once
+        if title and content:
+            if title.lower() == content.lower()[:len(title)].lower():
+                raise forms.ValidationError(
+                    "Content cannot start with the title."
+                )
+
+        return cleaned_data  # always return cleaned_data!
+```
+
+### Summary
+
+| Method | Scope | Use For |
+|--------|-------|---------|
+| Automatic | Single field | Type checking, required, max_length |
+| `clean_<fieldname>` | Single field | Custom rules for one field |
+| `clean` | Whole form | Rules that compare multiple fields |
+
+---
+
+## 7️⃣ Widgets — Controlling How Fields Look
+
+Widgets control the **HTML input type** rendered for each field:
+
+```python
+class PostForm(forms.ModelForm):
+    class Meta:
+        model = Post
+        fields = ['title', 'content', 'publish_date', 'is_published']
+        widgets = {
+            'title': forms.TextInput(attrs={
+                'class': 'form-control',
+                'placeholder': 'Enter post title'
+            }),
+            'content': forms.Textarea(attrs={
+                'class': 'form-control',
+                'rows': 6
+            }),
+            'publish_date': forms.DateInput(attrs={
+                'type': 'date',
+                'class': 'form-control'
+            }),
+            'is_published': forms.CheckboxInput(attrs={
+                'class': 'form-check-input'
+            }),
+        }
+```
+
+### Common Widgets
+
+| Widget | Renders As |
+|--------|------------|
+| `forms.TextInput()` | `<input type="text">` |
+| `forms.Textarea()` | `<textarea>` |
+| `forms.EmailInput()` | `<input type="email">` |
+| `forms.PasswordInput()` | `<input type="password">` |
+| `forms.NumberInput()` | `<input type="number">` |
+| `forms.DateInput()` | `<input type="date">` |
+| `forms.CheckboxInput()` | `<input type="checkbox">` |
+| `forms.Select()` | `<select>` dropdown |
+| `forms.FileInput()` | `<input type="file">` |
+| `forms.HiddenInput()` | `<input type="hidden">` |
+
+---
+
+## 8️⃣ Form Fields — The Complete List
+
+```python
+class MyForm(forms.Form):
+    # Text
+    name = forms.CharField(max_length=100)
+    bio = forms.CharField(widget=forms.Textarea)
+
+    # Numbers
+    age = forms.IntegerField(min_value=0, max_value=120)
+    price = forms.DecimalField(max_digits=10, decimal_places=2)
+
+    # Email & URL
+    email = forms.EmailField()
+    website = forms.URLField()
+
+    # Boolean
+    agree = forms.BooleanField(required=True)
+
+    # Choices dropdown
+    CATEGORY_CHOICES = [
+        ('tech', 'Technology'),
+        ('food', 'Food'),
+        ('travel', 'Travel'),
+    ]
+    category = forms.ChoiceField(choices=CATEGORY_CHOICES)
+
+    # Date
+    birth_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
+
+    # Files
+    avatar = forms.ImageField()
+    document = forms.FileField()
+```
+
+---
+
+## 9️⃣ Common Field Options
+
+```python
+title = forms.CharField(
+    max_length=200,
+    min_length=10,
+    required=True,                         # mandatory (default True)
+    label='Post Title',                    # custom label text
+    help_text='Enter a descriptive title', # shown below the field
+    initial='Default value',               # pre-filled value
+    error_messages={
+        'required': 'Please enter a title!',
+        'max_length': 'Title is too long!'
+    }
+)
+```
+
+---
+
+## 🎯 Common Interview Questions
+
+**Q1. What's the difference between `Form` and `ModelForm`?**
+> `Form` is for data not tied to a model (contact, search). `ModelForm` is tied to a model and can save directly to the database.
+
+**Q2. What is `cleaned_data` and why use it?**
+> After `is_valid()`, Django validates and converts form data to correct Python types, storing the result in `cleaned_data`. Always use it instead of `request.POST` because it's validated and properly typed.
+
+**Q3. What's the difference between `clean_title` and `clean`?**
+> `clean_title` validates a single field. `clean` validates the entire form and can compare multiple fields together.
+
+**Q4. What happens if you forget `return title` in `clean_title`?**
+> The field becomes `None` after validation — the value is lost even if it was valid.
+
+---
+
+## 📒 Notebook Summary
+
+```
+Module 5 — Forms & Validation
+
+Form      → not tied to model (contact, search)
+ModelForm → tied to model, saves to DB
+
+Flow:
+POST → form(request.POST) → is_valid()
+     → True  → cleaned_data → save → redirect
+     → False → form.errors  → re-render
+
+cleaned_data → validated + typed data
+             → always use instead of request.POST
+
+3 levels of validation:
+  1. Automatic      → field type checking
+  2. clean_<field>  → single field custom rules
+  3. clean          → whole form, multiple fields
+
+Always return the value at end of clean methods!
+
+Widgets → control HTML input type
+attrs   → add CSS classes and placeholders
+```
+
+---
+
+## ✏️ Quick Check
+
+**Q1.** What's wrong with this code?
+
+```python
+def clean_title(self):
+    title = self.cleaned_data['title']
+    if len(title) < 5:
+        raise forms.ValidationError("Too short!")
+```
+
+**Q2.** A user submits a form with an empty required field. Which attribute do you check to see what went wrong?
+
+**Q3.** What's the difference between these two?
+
+```python
+form = PostForm()
+form = PostForm(request.POST)
+```
+
+---
+
+*Answer when ready — then move on to **Module 6 — User Authentication!** 🚀*
