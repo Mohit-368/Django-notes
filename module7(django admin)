@@ -1,1 +1,396 @@
+# 🎓 Module 7 — Django Admin (Complete Guide)
 
+> Django Admin is one of Django's **most powerful features.** It gives you a full management interface for your data — automatically — with almost no code.
+
+---
+
+## 🎯 The Interview Questions
+
+> *"How do you customize the Django admin?"*
+> *"What is `list_display` in admin?"*
+> *"How do you make a field read-only in admin?"*
+> *"What is `inlines` in Django admin?"*
+
+---
+
+## 1️⃣ What Is Django Admin?
+
+Out of the box, Django gives you a **complete web interface** to create, read, update, and delete any model, manage users and permissions, and search and filter data — all without writing a single line of frontend code.
+
+Just register your model and it appears in admin:
+
+```python
+# blog/admin.py
+from django.contrib import admin
+from .models import Post
+
+admin.site.register(Post)  # Post appears in admin ✅
+```
+
+---
+
+## 2️⃣ Setting Up Admin
+
+```python
+# 1. Confirm these are in INSTALLED_APPS (they are by default):
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    ...
+]
+
+# 2. Confirm admin URL is included in urls.py:
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    ...
+]
+```
+
+```bash
+# 3. Create a superuser:
+python manage.py createsuperuser
+```
+
+Visit `http://127.0.0.1:8000/admin/` — you're in! 🎉
+
+---
+
+## 3️⃣ Basic ModelAdmin — Customising the List View
+
+Without customisation, admin shows this:
+
+```
+Posts
+──────────────
+Post object (1)
+Post object (2)
+Post object (3)
+```
+
+Let's fix it:
+
+```python
+# blog/admin.py
+from django.contrib import admin
+from .models import Post
+
+@admin.register(Post)  # cleaner than admin.site.register()
+class PostAdmin(admin.ModelAdmin):
+
+    list_display       = ['title', 'author', 'is_published', 'created_at']
+    list_filter        = ['is_published', 'created_at', 'author']
+    search_fields      = ['title', 'content', 'author__username']
+    ordering           = ['-created_at']
+    list_per_page      = 25
+    list_display_links = ['title']       # clicking title opens detail page
+    list_editable      = ['is_published'] # edit this column directly in list
+```
+
+### List View Options at a Glance
+
+| Option | What It Does |
+|--------|-------------|
+| `list_display` | Columns shown in list view |
+| `list_filter` | Sidebar filter panel |
+| `search_fields` | Enables the search box |
+| `ordering` | Default sort order |
+| `list_per_page` | Items per page |
+| `list_display_links` | Which column links to detail page |
+| `list_editable` | Columns editable directly in list |
+
+---
+
+## 4️⃣ Customising the Detail / Edit View
+
+```python
+@admin.register(Post)
+class PostAdmin(admin.ModelAdmin):
+    list_display = ['title', 'author', 'is_published', 'created_at']
+
+    # Simple flat field list:
+    fields = ['title', 'content', 'author', 'is_published']
+
+    # OR use fieldsets for grouped layout (better for complex forms):
+    fieldsets = [
+        ('Post Information', {
+            'fields': ['title', 'content']
+        }),
+        ('Publishing', {
+            'fields': ['is_published', 'author'],
+            'classes': ['collapse'],
+            'description': 'Control publishing settings here'
+        }),
+        ('Metadata', {
+            'fields': ['created_at', 'updated_at'],
+            'classes': ['collapse']
+        }),
+    ]
+
+    readonly_fields      = ['created_at', 'updated_at', 'slug']
+    prepopulated_fields  = {'slug': ('title',)}  # auto-fills slug from title
+    filter_horizontal    = ['tags']              # better UI for ManyToMany
+    raw_id_fields        = ['author']            # for ForeignKey with many options
+```
+
+### `fields` vs `fieldsets`
+
+| Option | Use For |
+|--------|---------|
+| `fields` | Simple list of fields to show, no grouping |
+| `fieldsets` | Group fields into named sections — better for complex forms |
+
+---
+
+## 5️⃣ Custom Methods in `list_display`
+
+You can add **custom columns** that aren't model fields:
+
+```python
+from django.utils.html import format_html
+
+@admin.register(Post)
+class PostAdmin(admin.ModelAdmin):
+    list_display = ['title', 'author', 'status_badge', 'word_count', 'preview_image']
+
+    def status_badge(self, obj):
+        if obj.is_published:
+            return format_html('<span style="color:green; font-weight:bold">✅ Published</span>')
+        return format_html('<span style="color:red; font-weight:bold">❌ Draft</span>')
+    status_badge.short_description = 'Status'
+
+    def word_count(self, obj):
+        return len(obj.content.split())
+    word_count.short_description = 'Words'
+
+    def preview_image(self, obj):
+        if obj.image:
+            return format_html('<img src="{}" width="50" height="50"/>', obj.image.url)
+        return 'No image'
+    preview_image.short_description = 'Preview'
+```
+
+---
+
+## 6️⃣ Custom Actions — Bulk Operations
+
+Actions let you do something to **multiple selected items** at once:
+
+```python
+@admin.register(Post)
+class PostAdmin(admin.ModelAdmin):
+    list_display = ['title', 'is_published']
+    actions = ['publish_posts', 'unpublish_posts', 'export_to_csv']
+
+    def publish_posts(self, request, queryset):
+        count = queryset.update(is_published=True)
+        self.message_user(request, f'{count} posts published successfully.')
+    publish_posts.short_description = 'Publish selected posts'
+
+    def unpublish_posts(self, request, queryset):
+        count = queryset.update(is_published=False)
+        self.message_user(request, f'{count} posts unpublished.')
+    unpublish_posts.short_description = 'Unpublish selected posts'
+
+    def export_to_csv(self, request, queryset):
+        import csv
+        from django.http import HttpResponse
+
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="posts.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow(['Title', 'Author', 'Published', 'Created'])
+        for post in queryset:
+            writer.writerow([post.title, post.author.username,
+                             post.is_published, post.created_at])
+        return response
+    export_to_csv.short_description = 'Export selected to CSV'
+```
+
+---
+
+## 7️⃣ Inlines — Editing Related Models Together
+
+Inlines let you edit related objects **on the same page** as the parent:
+
+```python
+from .models import Post, Comment
+
+class CommentInline(admin.TabularInline):  # or StackedInline
+    model = Comment
+    extra = 1  # show 1 empty form for a new comment
+    readonly_fields = ['created_at']
+    fields = ['author', 'content', 'is_approved', 'created_at']
+
+@admin.register(Post)
+class PostAdmin(admin.ModelAdmin):
+    list_display = ['title', 'author', 'is_published']
+    inlines = [CommentInline]  # comments appear inside post detail page
+```
+
+### `TabularInline` vs `StackedInline`
+
+| Type | Layout |
+|------|--------|
+| `TabularInline` | Related objects in a **compact table** |
+| `StackedInline` | Each related object displayed **vertically** with full detail |
+
+---
+
+## 8️⃣ Customising User Admin
+
+```python
+from django.contrib.auth.admin import UserAdmin
+from .models import CustomUser
+
+@admin.register(CustomUser)
+class CustomUserAdmin(UserAdmin):
+    list_display = ['username', 'email', 'is_staff', 'is_verified', 'date_joined']
+
+    # Add custom fields to the edit form:
+    fieldsets = UserAdmin.fieldsets + (
+        ('Custom Fields', {
+            'fields': ['bio', 'avatar', 'phone', 'is_verified']
+        }),
+    )
+
+    # Add custom fields to the create user form:
+    add_fieldsets = UserAdmin.add_fieldsets + (
+        ('Custom Fields', {
+            'fields': ['bio', 'phone']
+        }),
+    )
+```
+
+---
+
+## 9️⃣ Admin Site Branding
+
+```python
+# admin.py or urls.py
+admin.site.site_header  = 'My Blog Admin'     # top-left header text
+admin.site.site_title   = 'My Blog Admin'     # browser tab title
+admin.site.index_title  = 'Welcome to Admin'  # dashboard heading
+```
+
+---
+
+## 🔟 Overriding Admin Methods — Advanced Control
+
+```python
+@admin.register(Post)
+class PostAdmin(admin.ModelAdmin):
+
+    # Custom logic when admin saves an object
+    def save_model(self, request, obj, form, change):
+        if not obj.pk:                   # if it's a new object
+            obj.author = request.user    # set author to current admin user
+        super().save_model(request, obj, form, change)
+
+    # Custom logic before an object is deleted
+    def delete_model(self, request, obj):
+        print(f"Admin {request.user} deleted post: {obj.title}")
+        super().delete_model(request, obj)
+
+    # Limit which objects this admin user can see
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if request.user.is_superuser:
+            return qs
+        return qs.filter(author=request.user)  # non-superusers see only their own
+
+    # Control which fields are shown based on user role
+    def get_fields(self, request, obj=None):
+        fields = super().get_fields(request, obj)
+        if not request.user.is_superuser:
+            fields = [f for f in fields if f != 'is_featured']
+        return fields
+```
+
+---
+
+## 🎯 Common Interview Questions
+
+**Q1. What's the difference between `fields` and `fieldsets`?**
+> `fields` just lists which fields to show in the edit form. `fieldsets` groups fields into named sections — better for complex forms.
+
+**Q2. What does `list_editable` do?**
+> Makes fields editable directly in the list view without opening each object. The field must also be in `list_display`.
+
+**Q3. What's the difference between `TabularInline` and `StackedInline`?**
+> Both show related objects inline on the parent's detail page. `TabularInline` is compact (table layout). `StackedInline` shows each object stacked vertically with full detail.
+
+**Q4. How do you restrict what an admin user can see?**
+> Override `get_queryset()` and filter based on `request.user`.
+
+**Q5. What is `prepopulated_fields`?**
+> Automatically fills a field based on another field's value using JavaScript in the admin. Commonly used to auto-generate a slug from the title.
+
+---
+
+## 📒 Notebook Summary
+
+```
+Module 7 — Django Admin
+
+Register: @admin.register(Model)
+
+List view:
+  list_display        → columns to show
+  list_filter         → sidebar filters
+  search_fields       → search box
+  list_editable       → edit in list view
+  list_per_page       → pagination
+  ordering            → default sort
+
+Detail view:
+  fields              → flat field list
+  fieldsets           → grouped sections
+  readonly_fields     → can't be edited
+  prepopulated_fields → auto-fill (slug from title)
+  filter_horizontal   → better M2M widget
+
+Custom columns:
+  define method on ModelAdmin
+  use format_html for HTML output
+  set short_description for column header
+
+Actions → bulk operations on selected items
+Inlines → edit related models on same page
+  TabularInline → table layout (compact)
+  StackedInline → stacked layout (detailed)
+
+Override methods:
+  save_model()    → custom save logic
+  delete_model()  → custom delete logic
+  get_queryset()  → limit visible data
+  get_fields()    → control field visibility by role
+```
+
+---
+
+## ✏️ Quick Check
+
+**Q1.** What's wrong with this admin code?
+
+```python
+@admin.register(Post)
+class PostAdmin(admin.ModelAdmin):
+    list_display = ['title', 'is_published']
+    list_editable = ['title', 'is_published']
+```
+
+**Q2.** How would you make the admin only show posts belonging to the currently logged-in admin user?
+
+**Q3.** What does this do?
+
+```python
+prepopulated_fields = {'slug': ('title',)}
+```
+
+---
+
+*Answer when ready — then move on to **Module 8 — Static Files & Media Files!** 🚀*
